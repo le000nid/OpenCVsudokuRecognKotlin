@@ -1,0 +1,3 @@
+include ':app'
+rootProject.name='SudokuOpencv'
+include ':openCVLibrary3410'
