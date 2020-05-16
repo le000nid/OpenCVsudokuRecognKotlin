@@ -1,19 +1,35 @@
 package com.example.sudokuopencv
 
+import android.graphics.Bitmap
 import android.os.Bundle
+import android.util.Log
 import android.view.SurfaceView
+import android.view.View
 import android.view.WindowManager
+import android.widget.ImageView
 import androidx.appcompat.app.AppCompatActivity
+import com.googlecode.tesseract.android.TessBaseAPI
 import org.opencv.android.CameraBridgeViewBase
 import org.opencv.android.CameraBridgeViewBase.CvCameraViewFrame
 import org.opencv.android.OpenCVLoader
+import org.opencv.android.Utils
 import org.opencv.core.*
 import org.opencv.imgproc.Imgproc
+import java.util.*
+import kotlin.collections.ArrayList
 
 
 class MainActivity : AppCompatActivity(), CameraBridgeViewBase.CvCameraViewListener2 {
 
     private var mOpenCvCameraView: CameraBridgeViewBase? = null
+
+    var cropped: Mat? = null
+
+    var tessBaseApi: TessBaseAPI? = null
+
+    val DATA_PATH: String = "/mnt/sdcard/tesseract"
+
+    val lang = "eng"
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -22,7 +38,6 @@ class MainActivity : AppCompatActivity(), CameraBridgeViewBase.CvCameraViewListe
         mOpenCvCameraView = findViewById<CameraBridgeViewBase>(R.id.view)
         mOpenCvCameraView!!.visibility = SurfaceView.VISIBLE
         mOpenCvCameraView!!.setCvCameraViewListener(this)
-
     }
 
     override fun onResume() {
@@ -75,7 +90,7 @@ class MainActivity : AppCompatActivity(), CameraBridgeViewBase.CvCameraViewListe
         }
         val displayMat = inputFrame.rgba()
         val points = biggest.toArray()
-        var cropped = Mat()
+        cropped = Mat()
         if (points.size >= 4) {
             Imgproc.line(
                 displayMat,
@@ -106,15 +121,93 @@ class MainActivity : AppCompatActivity(), CameraBridgeViewBase.CvCameraViewListe
                 2
             )
             // crop the image
-            val R = Rect(
+            var recten = Rect(
                 Point(points[0].x , points[0].y),
                 Point(points[2].x, points[2].y)
             )
-            if (displayMat.width() > 1 && displayMat.height() > 1) {
-                cropped = Mat(displayMat, R)
-            }
-
+            cropped = Mat(displayMat, recten)
         }
         return displayMat
+    }
+    fun capture(v: View?) {
+        if (cropped!!.width() < 1 || cropped!!.height() < 1) {
+            finish()
+        }
+        mOpenCvCameraView?.visibility = View.GONE
+        val iv: ImageView = findViewById<ImageView>(R.id.img)
+        iv.visibility = View.VISIBLE
+
+        // initialize the TessBase
+        tessBaseApi = TessBaseAPI()
+        tessBaseApi!!.init(DATA_PATH,"eng")
+        tessBaseApi!!.setPageSegMode(TessBaseAPI.PageSegMode.PSM_SINGLE_BLOCK)
+        tessBaseApi!!.setVariable(TessBaseAPI.VAR_CHAR_WHITELIST, "123456789")
+        tessBaseApi!!.setVariable("classify_bin_numeric_mode", "1")
+
+        val output: Mat = cropped!!.clone()
+
+        val SUDOKU_SIZE = 9
+        val IMAGE_WIDTH: Int = output.width()
+        val IMAGE_HEIGHT: Int = output.height()
+        val PADDING = IMAGE_WIDTH / 25.toDouble()
+        val HSIZE = IMAGE_HEIGHT / SUDOKU_SIZE
+        val WSIZE = IMAGE_WIDTH / SUDOKU_SIZE
+        val digitRecognizer = DigitRecognizer()
+        digitRecognizer.ReadMNISTData()
+
+        val sudosa = Array(SUDOKU_SIZE) { IntArray(SUDOKU_SIZE) }
+
+            var y: Int = 0
+            var iy: Int = 0
+            while (y < IMAGE_HEIGHT - HSIZE) {
+                var x: Int = 0
+                var ix: Int = 0
+                while (x < IMAGE_WIDTH - WSIZE) {
+                    sudosa[iy][ix] = 0
+                    val cx: Int = x + WSIZE / 2
+                    val cy: Int = y + HSIZE / 2
+                    val p1: Point = Point(cx - PADDING, cy - PADDING)
+                    val p2: Point = Point(cx + PADDING, cy + PADDING)
+                    val R: Rect = Rect(p1, p2)
+                    val digit_cropped: Mat = Mat(output, R)
+                    Imgproc.GaussianBlur(digit_cropped, digit_cropped, Size(5.0, 5.0), 0.0)
+                    Imgproc.rectangle(output, p1, p2, Scalar(0.0, 0.0, 0.0))
+                    val digit_bitmap: Bitmap? = Bitmap.createBitmap(
+                        digit_cropped.cols(),
+                        digit_cropped.rows(),
+                        Bitmap.Config.ARGB_8888
+                    )
+                    org.opencv.android.Utils.matToBitmap(digit_cropped, digit_bitmap)
+                    tessBaseApi!!.setImage(digit_bitmap)
+                    val recognizedText:String = tessBaseApi!!.utF8Text
+                    if (recognizedText.length == 1) {
+                        sudosa[iy][ix] = Integer.valueOf(recognizedText)
+                    }
+                    tessBaseApi!!.clear()
+                    x += WSIZE
+                    ix++
+                }
+                android.util.Log.i("testing", "" + Arrays.toString(sudosa.get(iy)))
+                y += HSIZE
+                iy++
+            }
+
+        tessBaseApi!!.end()
+        val test_sudo = Arrays.copyOf(sudosa, sudosa.size)
+
+        // make a copy of the captured array
+
+        // make a copy of the captured array
+        val temp = Array(9) { IntArray(9) }
+        for (i in 0..8) {
+            for (y in 0..8) {
+                temp[i][y] = test_sudo[i][y]
+            }
+        }
+        Log.i("array", temp[0][0].toString())
+
+        val b = Bitmap.createBitmap(output.cols(), output.rows(), Bitmap.Config.ARGB_8888)
+        Utils.matToBitmap(output, b)
+        iv.setImageBitmap(b)
     }
 }
