@@ -1,5 +1,7 @@
 package com.example.sudokuopencv
 
+import android.R.attr
+import android.R.attr.data
 import android.graphics.Bitmap
 import android.os.Bundle
 import android.util.Log
@@ -21,7 +23,7 @@ import kotlin.collections.ArrayList
 
 class MainActivity : AppCompatActivity(), CameraBridgeViewBase.CvCameraViewListener2 {
 
-    private var mOpenCvCameraView: CameraBridgeViewBase? = null
+    private var mOpenCvCameraView: PortraitCameraView ? = null
 
     var cropped: Mat? = null
 
@@ -29,13 +31,11 @@ class MainActivity : AppCompatActivity(), CameraBridgeViewBase.CvCameraViewListe
 
     val DATA_PATH: String = "/mnt/sdcard/tesseract"
 
-    val lang = "eng"
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN)
         setContentView(R.layout.activity_main)
-        mOpenCvCameraView = findViewById<CameraBridgeViewBase>(R.id.view)
+        mOpenCvCameraView = findViewById<PortraitCameraView>(R.id.view)
         mOpenCvCameraView!!.visibility = SurfaceView.VISIBLE
         mOpenCvCameraView!!.setCvCameraViewListener(this)
     }
@@ -121,15 +121,43 @@ class MainActivity : AppCompatActivity(), CameraBridgeViewBase.CvCameraViewListe
                 2
             )
             // crop the image
-            var recten = Rect(
-                Point(points[0].x , points[0].y),
-                Point(points[2].x, points[2].y)
+            val moment = Imgproc.moments(biggest)
+            val x = (moment._m10 / moment._m00).toInt()
+            val y = (moment._m01 / moment._m00).toInt()
+
+            val sortedPoints = arrayOfNulls<Point>(4)
+
+            for (i in 0..3) {
+                if (points[i].x < x && points[i].y < y) {
+                    sortedPoints[0] = Point(points[i].x, points[i].y)
+                } else if (points[i].x > x && points[i].y < y) {
+                    sortedPoints[1] = Point(points[i].x, points[i].y)
+                } else if (points[i].x < x && points[i].y > y) {
+                    sortedPoints[2] = Point(points[i].x, points[i].y)
+                } else if (points[i].x > x && points[i].y > y) {
+                    sortedPoints[3] = Point(points[i].x, points[i].y)
+                }
+            }
+
+            val src = MatOfPoint2f(
+                points[1],
+                points[0],
+                points[2],
+                points[3]
+                )
+            val dst = MatOfPoint2f(
+                Point(0.0, 0.0),
+                Point(500.0-1, 0.0),
+                Point(0.0, 500.0-1),
+                Point(500.0-1, 500.0-1)
             )
-            cropped = Mat(displayMat, recten)
+            val warpMat = Imgproc.getPerspectiveTransform(src, dst)
+            Imgproc.warpPerspective(displayMat, cropped, warpMat, Size(500.0, 500.0))
         }
         return displayMat
     }
     fun capture(v: View?) {
+
         if (cropped!!.width() < 1 || cropped!!.height() < 1) {
             finish()
         }
@@ -152,8 +180,6 @@ class MainActivity : AppCompatActivity(), CameraBridgeViewBase.CvCameraViewListe
         val PADDING = IMAGE_WIDTH / 25.toDouble()
         val HSIZE = IMAGE_HEIGHT / SUDOKU_SIZE
         val WSIZE = IMAGE_WIDTH / SUDOKU_SIZE
-        val digitRecognizer = DigitRecognizer()
-        digitRecognizer.ReadMNISTData()
 
         val sudosa = Array(SUDOKU_SIZE) { IntArray(SUDOKU_SIZE) }
 
@@ -166,18 +192,23 @@ class MainActivity : AppCompatActivity(), CameraBridgeViewBase.CvCameraViewListe
                     sudosa[iy][ix] = 0
                     val cx: Int = x + WSIZE / 2
                     val cy: Int = y + HSIZE / 2
-                    val p1: Point = Point(cx - PADDING, cy - PADDING)
-                    val p2: Point = Point(cx + PADDING, cy + PADDING)
+                    val p1: Point = Point(cx + PADDING, cy + PADDING)
+                    val p2: Point = Point(cx - PADDING, cy - PADDING)
                     val R: Rect = Rect(p1, p2)
                     val digit_cropped: Mat = Mat(output, R)
-                    Imgproc.GaussianBlur(digit_cropped, digit_cropped, Size(5.0, 5.0), 0.0)
+                    val grayMat = Mat()
+                    Imgproc.cvtColor(digit_cropped,grayMat,Imgproc.COLOR_BGR2GRAY)
+                    val blurMat = Mat()
+                    Imgproc.GaussianBlur(grayMat, blurMat, Size(3.0, 3.0), 0.0)
+                    val thresh = Mat()
+                    Imgproc.adaptiveThreshold(blurMat, thresh, 255.0,Imgproc.ADAPTIVE_THRESH_MEAN_C,Imgproc.THRESH_BINARY_INV,75,10.0)
                     Imgproc.rectangle(output, p1, p2, Scalar(0.0, 0.0, 0.0))
                     val digit_bitmap: Bitmap? = Bitmap.createBitmap(
                         digit_cropped.cols(),
                         digit_cropped.rows(),
                         Bitmap.Config.ARGB_8888
                     )
-                    org.opencv.android.Utils.matToBitmap(digit_cropped, digit_bitmap)
+                    Utils.matToBitmap(thresh, digit_bitmap)
                     tessBaseApi!!.setImage(digit_bitmap)
                     val recognizedText:String = tessBaseApi!!.utF8Text
                     if (recognizedText.length == 1) {
@@ -187,7 +218,7 @@ class MainActivity : AppCompatActivity(), CameraBridgeViewBase.CvCameraViewListe
                     x += WSIZE
                     ix++
                 }
-                android.util.Log.i("testing", "" + Arrays.toString(sudosa.get(iy)))
+                Log.i("testing", "" + Arrays.toString(sudosa.get(iy)))
                 y += HSIZE
                 iy++
             }
@@ -196,15 +227,12 @@ class MainActivity : AppCompatActivity(), CameraBridgeViewBase.CvCameraViewListe
         val test_sudo = Arrays.copyOf(sudosa, sudosa.size)
 
         // make a copy of the captured array
-
-        // make a copy of the captured array
         val temp = Array(9) { IntArray(9) }
         for (i in 0..8) {
             for (y in 0..8) {
                 temp[i][y] = test_sudo[i][y]
             }
         }
-        Log.i("array", temp[0][0].toString())
 
         val b = Bitmap.createBitmap(output.cols(), output.rows(), Bitmap.Config.ARGB_8888)
         Utils.matToBitmap(output, b)
